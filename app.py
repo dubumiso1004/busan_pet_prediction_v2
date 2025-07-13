@@ -22,7 +22,7 @@ def dms_to_decimal(dms_str):
 df["lat_decimal"] = df["lat"].apply(dms_to_decimal)
 df["lon_decimal"] = df["lon"].apply(dms_to_decimal)
 
-# 위경도 → 기상청 격자
+# 위경도 → 격자 변환
 def convert_to_grid(lat, lon):
     RE = 6371.00877
     GRID = 5.0
@@ -46,7 +46,7 @@ def convert_to_grid(lat, lon):
     y = ro - ra * math.cos(theta) + YO + 0.5
     return int(x), int(y)
 
-# 기상청 API 호출 함수
+# 기상청 API
 def get_weather_from_kma(api_key, lat, lon, target_dt):
     base_dt = target_dt - timedelta(hours=target_dt.hour % 3)
     base_date = base_dt.strftime("%Y%m%d")
@@ -58,7 +58,6 @@ def get_weather_from_kma(api_key, lat, lon, target_dt):
         f"serviceKey={api_key}&numOfRows=1000&pageNo=1&dataType=JSON"
         f"&base_date={base_date}&base_time={base_time}&nx={nx}&ny={ny}"
     )
-
     try:
         response = requests.get(url)
         data = response.json()
@@ -80,7 +79,7 @@ def get_weather_from_kma(api_key, lat, lon, target_dt):
 
 # Streamlit 시작
 st.title("📍 클릭 위치 기반 PET 예측 시스템")
-st.markdown("SVF/GVI/BVI를 조절하고, 현재와 예보 PET를 비교해보세요.")
+st.markdown("SVF/GVI/BVI를 조절하고, 실측 기반 PET과 예보 기반 PET을 비교해보세요.")
 
 # 날짜/시간 선택
 col1, col2 = st.columns(2)
@@ -90,22 +89,23 @@ with col2:
     time_input = st.time_input("예보 기준 시간", datetime.now().time())
 selected_dt = datetime.combine(date_input, time_input)
 
-# 지도 표시
+# 지도 생성 및 첫 렌더링
 m = folium.Map(location=[df["lat_decimal"].mean(), df["lon_decimal"].mean()], zoom_start=17)
 map_data = st_folium(m, width=700, height=500)
 
-# 지도 클릭 시 처리
+# 클릭 이벤트 처리
 if map_data and map_data.get("last_clicked"):
     lat = map_data["last_clicked"]["lat"]
     lon = map_data["last_clicked"]["lng"]
 
+    # 마커만 추가 (st_folium은 다시 호출하지 않음)
     folium.Marker(
         location=[lat, lon],
         tooltip="선택 위치",
         icon=folium.Icon(color="red", icon="map-marker")
     ).add_to(m)
 
-    # 최근접 측정지점에서 SVF/GVI/BVI 가져오기
+    # SVF/GVI/BVI 자동 불러오기
     df["distance"] = ((df["lat_decimal"] - lat)**2 + (df["lon_decimal"] - lon)**2)
     nearest = df.loc[df["distance"].idxmin()]
     default_svf = float(nearest["SVF"])
@@ -134,8 +134,6 @@ if map_data and map_data.get("last_clicked"):
         st.success(f"📅 {selected_dt.strftime('%Y-%m-%d %H:%M')} 기준 PET: {pet_forecast:.2f} °C")
     else:
         st.warning("⚠ 선택한 시각에 기상 데이터가 없습니다. 다른 날짜/시간을 선택해보세요.")
-
-    st_folium(m, width=700, height=500)
 
 else:
     st.warning("🖱 지도를 클릭하면 위치가 선택됩니다.")
