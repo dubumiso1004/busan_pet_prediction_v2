@@ -1,79 +1,47 @@
 import streamlit as st
-import pandas as pd
+import numpy as np
 import joblib
-import folium
-from streamlit_folium import st_folium
-import math
 
-# 모델과 데이터 불러오기
-model = joblib.load("model/pet_rf_model_trained.pkl")
-df = pd.read_excel("data/total_svf_gvi_bvi_250618.xlsx", sheet_name="gps 포함")
+# 모델 불러오기
+model = joblib.load("model/pet_rf_model_trained.pkl")  # 모델 경로에 맞게 조정하세요
 
-# 위경도 변환 함수
-def dms_to_decimal(dms_str):
-    parts = list(map(float, dms_str.split(";")))
-    return parts[0] + parts[1] / 60 + parts[2] / 3600
+# 페이지 제목
+st.title("🌡️ PET 예측 시스템 (부산대학교 대상지)")
+st.write("지점 선택 또는 시각환경 조정 후 PET 예측 결과와 스마트워치 알림 메시지를 확인하세요.")
 
-df["lat_decimal"] = df["lat"].apply(dms_to_decimal)
-df["lon_decimal"] = df["lon"].apply(dms_to_decimal)
+# 사용자 입력 (예: SVF, GVI, BVI)
+svf = st.slider("SVF (하늘 가시성)", 0.0, 1.0, 0.87)
+gvi = st.slider("GVI (녹지 시야율)", 0.0, 1.0, 0.85)
+bvi = st.slider("BVI (건물 시야율)", 0.0, 1.0, 0.31)
 
-# 월별 평균 기상값 (예: 2024년 평균값)
-monthly_weather = {
-    6: {"temp": 25.4, "humi": 70, "wind": 1.5},
-    7: {"temp": 28.3, "humi": 75, "wind": 1.3},
-    8: {"temp": 29.7, "humi": 73, "wind": 1.2},
-    9: {"temp": 26.1, "humi": 68, "wind": 1.6}
-}
+# 고정 기상조건 예시 (8월 평균)
+temp = 29.7  # °C
+humidity = 73  # %
+wind = 1.2  # m/s
 
-# Streamlit 인터페이스
-st.set_page_config(layout="centered")
-st.title("📍 클릭 위치 기반 PET 예측 시스템")
-st.markdown("지도에서 위치를 클릭하면 측정된 기온/습도/풍속이 자동 적용되며, SVF/GVI/BVI를 조절하여 월별 PET을 예측합니다.")
+# 모델 입력 및 예측
+input_data = np.array([[svf, gvi, bvi, temp, humidity, wind]])
+predicted_pet = model.predict(input_data)[0]
 
-# 사용자 월 선택
-selected_month = st.selectbox("예측할 월을 선택하세요", [6, 7, 8, 9], index=2)
+# 예측 결과 출력
+st.subheader("📊 예측 결과")
+weather_info = f"{temp}°C / {humidity}% / {wind} m/s"
+st.info(f"📅 8월 평균 기상조건: {weather_info}")
+st.success(f"🌡️ 예측된 PET: {predicted_pet:.2f}°C")
 
-# 지도 생성
-m = folium.Map(location=[df["lat_decimal"].mean(), df["lon_decimal"].mean()], zoom_start=17)
-map_data = st_folium(m, width=700, height=500)
+# 선택된 지점 이름 (예시)
+selected_location = "Busan Univ.19"
 
-# 지도 클릭 시 동작
-if map_data and map_data.get("last_clicked"):
-    lat = map_data["last_clicked"]["lat"]
-    lon = map_data["last_clicked"]["lng"]
+# 스마트워치용 요약 메시지 생성
+summary = f"""📍 {selected_location}
+🌡️ 예측 PET: {predicted_pet:.1f}°C
+📅 8월 평균 기상: {weather_info}
+⚠️ 체감: 매우 더움 (주의 필요)"""
 
-    # 최근접 측정지점 탐색
-    df["distance"] = ((df["lat_decimal"] - lat) ** 2 + (df["lon_decimal"] - lon) ** 2)
-    nearest = df.loc[df["distance"].idxmin()]
-    nearest_name = nearest["Location_Name"]
+# 스마트워치 알림용 메시지 출력
+st.markdown("### 📲 스마트워치 알림용 메시지")
+st.text_area("아래 내용을 복사해서 워치 알림 앱에 붙여넣으세요:", summary, height=120)
 
-    # 해당 지점 실측값 불러오기
-    temp = nearest["AirTemperature"]
-    humi = nearest["Humidity"]
-    wind = nearest["WindSpeed"]
-    default_svf = nearest["SVF"]
-    default_gvi = nearest["GVI"]
-    default_bvi = nearest["BVI"]
+# 다운로드 버튼으로 저장도 가능하게
+st.download_button("📥 메시지 저장 (텍스트 파일)", summary, file_name="pet_message.txt")
 
-    # 시각환경 조정 슬라이더
-    st.markdown(f"### 🏷️ 선택된 지점: **{nearest_name}**")
-    svf = st.slider("SVF", 0.0, 1.0, float(default_svf), 0.01)
-    gvi = st.slider("GVI", 0.0, 1.0, float(default_gvi), 0.01)
-    bvi = st.slider("BVI", 0.0, 1.0, float(default_bvi), 0.01)
-
-    # 월별 평균 기상데이터 적용
-    weather = monthly_weather[selected_month]
-    temp = weather["temp"]
-    humi = weather["humi"]
-    wind = weather["wind"]
-
-    # PET 예측
-    X = [[svf, gvi, bvi, temp, humi, wind]]
-    pet_pred = model.predict(X)[0]
-
-    # 결과 출력
-    st.markdown("### 📊 예측 결과")
-    st.info(f"🗓️ {selected_month}월 평균 기상: {temp}°C / {humi}% / {wind} m/s")
-    st.success(f"🌡️ 예측된 PET: {pet_pred:.2f} °C")
-else:
-    st.warning("🖱 지도를 클릭하면 예측이 시작됩니다.")
