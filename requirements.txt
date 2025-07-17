@@ -3,6 +3,5 @@ pandas
 numpy
 scikit-learn
 joblib
-openpyxl
-folium
-streamlit-folium
+geopy
+pydeck
