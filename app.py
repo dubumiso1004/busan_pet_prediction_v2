@@ -1,47 +1,59 @@
 import streamlit as st
+import pandas as pd
 import numpy as np
+import pydeck as pdk
+from sklearn.ensemble import RandomForestRegressor
 import joblib
+from geopy.distance import geodesic
 
-# 모델 불러오기
-model = joblib.load("model/pet_rf_model_trained.pkl")  # 모델 경로에 맞게 조정하세요
+# 실측 데이터 로드
+df = pd.read_csv("measured_data.csv")  # SVF, GVI, BVI, lat, lon 포함
 
-# 페이지 제목
+# 모델 로드
+model = joblib.load("pet_rf_model_trained.pkl")
+
 st.title("🌡️ PET 예측 시스템 (부산대학교 대상지)")
-st.write("지점 선택 또는 시각환경 조정 후 PET 예측 결과와 스마트워치 알림 메시지를 확인하세요.")
 
-# 사용자 입력 (예: SVF, GVI, BVI)
-svf = st.slider("SVF (하늘 가시성)", 0.0, 1.0, 0.87)
-gvi = st.slider("GVI (녹지 시야율)", 0.0, 1.0, 0.85)
-bvi = st.slider("BVI (건물 시야율)", 0.0, 1.0, 0.31)
+st.subheader("📍 지도에서 위치를 선택하세요")
+st.write("지도를 클릭하면 해당 위치의 시각환경 값을 자동으로 불러옵니다.")
 
-# 고정 기상조건 예시 (8월 평균)
-temp = 29.7  # °C
-humidity = 73  # %
-wind = 1.2  # m/s
+# 기본 지도 위치
+default_location = [35.2320, 129.0845]  # 부산대학교 중심 예시
 
-# 모델 입력 및 예측
-input_data = np.array([[svf, gvi, bvi, temp, humidity, wind]])
-predicted_pet = model.predict(input_data)[0]
+# 지도 표시
+clicked_location = st.map(center={"lat": default_location[0], "lon": default_location[1]}, zoom=16)
 
-# 예측 결과 출력
-st.subheader("📊 예측 결과")
-weather_info = f"{temp}°C / {humidity}% / {wind} m/s"
-st.info(f"📅 8월 평균 기상조건: {weather_info}")
-st.success(f"🌡️ 예측된 PET: {predicted_pet:.2f}°C")
+# 위도, 경도 추출
+if clicked_location is not None and "latitude" in clicked_location:
+    lat = clicked_location["latitude"]
+    lon = clicked_location["longitude"]
+    st.success(f"선택된 위치: {lat:.5f}, {lon:.5f}")
 
-# 선택된 지점 이름 (예시)
-selected_location = "Busan Univ.19"
+    # 📌 가장 가까운 실측 지점 찾기
+    def get_nearest_row(lat, lon, df):
+        df["distance"] = df.apply(lambda row: geodesic((lat, lon), (row["lat"], row["lon"])).meters, axis=1)
+        return df.loc[df["distance"].idxmin()]
 
-# 스마트워치용 요약 메시지 생성
-summary = f"""📍 {selected_location}
-🌡️ 예측 PET: {predicted_pet:.1f}°C
-📅 8월 평균 기상: {weather_info}
-⚠️ 체감: 매우 더움 (주의 필요)"""
+    nearest = get_nearest_row(lat, lon, df)
+    svf = nearest["SVF"]
+    gvi = nearest["GVI"]
+    bvi = nearest["BVI"]
 
-# 스마트워치 알림용 메시지 출력
-st.markdown("### 📲 스마트워치 알림용 메시지")
-st.text_area("아래 내용을 복사해서 워치 알림 앱에 붙여넣으세요:", summary, height=120)
+    st.write(f"🔹 자동 불러온 시각환경 값: SVF={svf:.2f}, GVI={gvi:.2f}, BVI={bvi:.2f}")
 
-# 다운로드 버튼으로 저장도 가능하게
-st.download_button("📥 메시지 저장 (텍스트 파일)", summary, file_name="pet_message.txt")
+    # 기상 요소 (예시 평균값 또는 실시간 API 사용 가능)
+    temp, rh, wind = 29.7, 73, 1.2  # 8월 평균
+    input_features = np.array([[svf, gvi, bvi, temp, rh, wind]])
+    predicted_pet = model.predict(input_features)[0]
 
+    # 결과 출력
+    st.subheader("📊 예측 결과")
+    st.info(f"8월 평균 기상조건: {temp}°C / {rh}% / {wind} m/s")
+    st.success(f"예측된 PET: {predicted_pet:.2f}°C")
+
+    # 스마트워치 메시지
+    st.subheader("⌚ 스마트워치 알림용 메시지")
+    st.code(f"📍 Busan Univ.\n🌡️ PET: {predicted_pet:.2f}°C\n🟢 체감 쾌적 수준: 자동 메시지")
+
+else:
+    st.warning("지도를 클릭하면 결과가 표시됩니다.")
