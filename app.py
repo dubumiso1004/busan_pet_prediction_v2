@@ -1,59 +1,66 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-import pydeck as pdk
-from sklearn.ensemble import RandomForestRegressor
 import joblib
-from geopy.distance import geodesic
+from sklearn.metrics.pairwise import haversine_distances
+from math import radians
+from streamlit_folium import st_folium
+import folium
 
-# 실측 데이터 로드
-df = pd.read_csv("measured_data.csv")  # SVF, GVI, BVI, lat, lon 포함
+st.set_page_config(page_title="PET 예측 시스템", layout="wide")
+st.title("🌡️ PET 예측 시스템 (실측 기반 + 활동 권장도 표시)")
 
-# 모델 로드
+@st.cache_data
+def load_data():
+    df = pd.read_csv("measured_data.csv")
+    def dms_to_dd(dms): parts = list(map(float, dms.split(";"))); return parts[0] + parts[1]/60 + parts[2]/3600
+    df["lat_dd"] = df["Lat"].apply(dms_to_dd)
+    df["lon_dd"] = df["Lon"].apply(dms_to_dd)
+    return df
+
+df = load_data()
 model = joblib.load("pet_rf_model_trained.pkl")
 
-st.title("🌡️ PET 예측 시스템 (부산대학교 대상지)")
-
-st.subheader("📍 지도에서 위치를 선택하세요")
-st.write("지도를 클릭하면 해당 위치의 시각환경 값을 자동으로 불러옵니다.")
-
-# 기본 지도 위치
-default_location = [35.2320, 129.0845]  # 부산대학교 중심 예시
-
 # 지도 표시
-clicked_location = st.map(center={"lat": default_location[0], "lon": default_location[1]}, zoom=16)
+m = folium.Map(location=[35.2313, 129.0805], zoom_start=16)
+folium.Marker([35.2313, 129.0805], popup="부산대학교").add_to(m)
+clicked = st_folium(m, width=700, height=500)
 
-# 위도, 경도 추출
-if clicked_location is not None and "latitude" in clicked_location:
-    lat = clicked_location["latitude"]
-    lon = clicked_location["longitude"]
-    st.success(f"선택된 위치: {lat:.5f}, {lon:.5f}")
+if clicked and clicked.get("last_clicked"):
+    lat = clicked["last_clicked"]["lat"]
+    lon = clicked["last_clicked"]["lng"]
+    st.success(f"선택한 위치: {lat:.5f}, {lon:.5f}")
 
-    # 📌 가장 가까운 실측 지점 찾기
-    def get_nearest_row(lat, lon, df):
-        df["distance"] = df.apply(lambda row: geodesic((lat, lon), (row["lat"], row["lon"])).meters, axis=1)
-        return df.loc[df["distance"].idxmin()]
+    clicked_point = np.array([[radians(lat), radians(lon)]])
+    points = df[["lat_dd", "lon_dd"]].applymap(radians).values
+    distances = haversine_distances(clicked_point, points)[0] * 6371
+    nearest = df.iloc[distances.argmin()]
 
-    nearest = get_nearest_row(lat, lon, df)
-    svf = nearest["SVF"]
-    gvi = nearest["GVI"]
-    bvi = nearest["BVI"]
+    svf = st.slider("SVF", 0.0, 1.0, float(nearest["SVF"]), 0.01)
+    gvi = st.slider("GVI", 0.0, 1.0, float(nearest["GVI"]), 0.01)
+    bvi = st.slider("BVI", 0.0, 1.0, float(nearest["BVI"]), 0.01)
 
-    st.write(f"🔹 자동 불러온 시각환경 값: SVF={svf:.2f}, GVI={gvi:.2f}, BVI={bvi:.2f}")
+    temp = st.number_input("기온 (°C)", value=27.0)
+    hum = st.number_input("습도 (%)", value=60.0)
+    wind = st.number_input("풍속 (m/s)", value=1.5)
 
-    # 기상 요소 (예시 평균값 또는 실시간 API 사용 가능)
-    temp, rh, wind = 29.7, 73, 1.2  # 8월 평균
-    input_features = np.array([[svf, gvi, bvi, temp, rh, wind]])
-    predicted_pet = model.predict(input_features)[0]
+    if temp and hum and wind:
+        input_data = [[svf, gvi, bvi, temp, hum, wind]]
+        pet = model.predict(input_data)[0]
+        st.success(f"🌡️ 예측된 PET: {pet:.2f}°C")
 
-    # 결과 출력
-    st.subheader("📊 예측 결과")
-    st.info(f"8월 평균 기상조건: {temp}°C / {rh}% / {wind} m/s")
-    st.success(f"예측된 PET: {predicted_pet:.2f}°C")
+        # 활동 권장 메시지
+        if pet <= 18:
+            status = "⚠️ 쌀쌀함: 겉옷을 챙기세요."
+        elif pet <= 23:
+            status = "🟢 쾌적함: 야외 활동하기 좋습니다!"
+        elif pet <= 29:
+            status = "🟡 따뜻함: 활동 가능하지만 약간 더울 수 있어요."
+        elif pet <= 35:
+            status = "🟠 더움: 격한 활동은 피하는 것이 좋아요."
+        else:
+            status = "🔴 매우 더움: 실외 활동은 피하고 휴식을 권장합니다."
 
-    # 스마트워치 메시지
-    st.subheader("⌚ 스마트워치 알림용 메시지")
-    st.code(f"📍 Busan Univ.\n🌡️ PET: {predicted_pet:.2f}°C\n🟢 체감 쾌적 수준: 자동 메시지")
-
+        st.info(f"👤 체감 활동 권장도: {status}")
 else:
-    st.warning("지도를 클릭하면 결과가 표시됩니다.")
+    st.info("지도를 클릭하여 위치를 선택해 주세요.")
